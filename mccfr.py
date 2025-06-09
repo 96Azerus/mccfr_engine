@@ -1,7 +1,7 @@
-# mccfr_engine/mccfr.py (v2 - правильная рекурсия)
+# mccfr_engine/mccfr.py (v3 - правильное имя функции)
 import numpy as np
 
-def cfr_traverse(state, strategy_profile):
+def mccfr_traverse(state, strategy_profile): # ВОЗВРАЩАЕМ ИМЯ mccfr_traverse
     """
     Рекурсивная функция для обхода дерева игры и обновления стратегии.
     """
@@ -14,17 +14,23 @@ def cfr_traverse(state, strategy_profile):
     num_actions = len(legal_actions)
 
     if num_actions == 0:
-        return cfr_traverse(state.apply_action(None), strategy_profile) # Если нет действий, просто передаем ход
+        # Если нет действий, просто передаем ход следующему
+        # Это может случиться, если колода закончилась до заполнения доски
+        return mccfr_traverse(state.apply_action(None), strategy_profile)
 
     if infoset_key not in strategy_profile:
         strategy_profile[infoset_key] = {
             'regret_sum': np.zeros(num_actions, dtype=np.float32),
             'strategy_sum': np.zeros(num_actions, dtype=np.float32),
-            'action_map': {i: action for i, action in enumerate(legal_actions)} # Сохраняем карту действий
         }
     
     node = strategy_profile[infoset_key]
     
+    # Проверка на случай, если количество действий изменилось (не должно, но для безопасности)
+    if len(node['regret_sum']) != num_actions:
+        node['regret_sum'] = np.zeros(num_actions, dtype=np.float32)
+        node['strategy_sum'] = np.zeros(num_actions, dtype=np.float32)
+
     # Regret Matching
     regrets = node['regret_sum']
     positive_regrets = np.maximum(regrets, 0)
@@ -42,17 +48,16 @@ def cfr_traverse(state, strategy_profile):
     action_utils = np.zeros((num_actions, state.players))
     for i, action in enumerate(legal_actions):
         next_state = state.apply_action(action)
-        action_utils[i] = cfr_traverse(next_state, strategy_profile)
+        action_utils[i] = mccfr_traverse(next_state, strategy_profile)
 
     # Ожидаемая утилита узла для всех игроков
     node_utils = np.dot(strategy, action_utils)
     
     # Обновление сожалений для текущего игрока
-    # Сожаление = (утилита действия) - (средняя утилита узла)
     current_player_action_utils = action_utils[:, current_player]
     current_player_node_util = node_utils[current_player]
     
-    regrets = current_player_action_utils - current_player_node_util
-    node['regret_sum'] += regrets
+    regrets_update = current_player_action_utils - current_player_node_util
+    node['regret_sum'] += regrets_update
     
     return node_utils
