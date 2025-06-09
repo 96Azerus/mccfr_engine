@@ -1,10 +1,7 @@
-# mccfr_engine/mccfr.py (v4 - исправлены рекурсивные вызовы)
+# mccfr_engine/mccfr.py (v5 - с ручным откатом состояния)
 import numpy as np
 
 def mccfr_traverse(state, strategy_profile):
-    """
-    Рекурсивная функция для обхода дерева игры и обновления стратегии.
-    """
     if state.is_terminal():
         return state.get_payoffs()
 
@@ -14,8 +11,10 @@ def mccfr_traverse(state, strategy_profile):
     num_actions = len(legal_actions)
 
     if num_actions == 0:
-        # ИСПРАВЛЕНО: Передаем strategy_profile
-        return mccfr_traverse(state.apply_action(None), strategy_profile)
+        undo_info = state.apply_action(None)
+        payoffs = mccfr_traverse(state, strategy_profile)
+        state.undo_action(undo_info)
+        return payoffs
 
     if infoset_key not in strategy_profile:
         strategy_profile[infoset_key] = {
@@ -29,7 +28,6 @@ def mccfr_traverse(state, strategy_profile):
         node['regret_sum'] = np.zeros(num_actions, dtype=np.float32)
         node['strategy_sum'] = np.zeros(num_actions, dtype=np.float32)
 
-    # Regret Matching
     regrets = node['regret_sum']
     positive_regrets = np.maximum(regrets, 0)
     regret_sum_total = np.sum(positive_regrets)
@@ -39,20 +37,19 @@ def mccfr_traverse(state, strategy_profile):
     else:
         strategy = np.ones(num_actions) / num_actions
 
-    # Обновляем среднюю стратегию
     node['strategy_sum'] += strategy
 
-    # Считаем утилиты для каждого действия
     action_utils = np.zeros((num_actions, state.players))
     for i, action in enumerate(legal_actions):
-        next_state = state.apply_action(action)
-        # ИСПРАВЛЕНО: Передаем strategy_profile
-        action_utils[i] = mccfr_traverse(next_state, strategy_profile)
+        # ПРИМЕНЯЕМ ДЕЙСТВИЕ
+        undo_info = state.apply_action(action)
+        # РЕКУРСИВНЫЙ ВЫЗОВ
+        action_utils[i] = mccfr_traverse(state, strategy_profile)
+        # ОТКАТЫВАЕМ ДЕЙСТВИЕ
+        state.undo_action(undo_info)
 
-    # Ожидаемая утилита узла для всех игроков
     node_utils = np.dot(strategy, action_utils)
     
-    # Обновление сожалений для текущего игрока
     current_player_action_utils = action_utils[:, current_player]
     current_player_node_util = node_utils[current_player]
     
