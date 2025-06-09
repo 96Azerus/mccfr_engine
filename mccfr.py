@@ -1,21 +1,18 @@
-# mccfr_engine/mccfr.py (v6 - Финальная отладка)
+# mccfr_engine/mccfr.py (v7 - правильная работа с next_state)
 import numpy as np
 
 def mccfr_traverse(state, strategy_profile):
     if state.is_terminal():
         return state.get_payoffs()
 
-    # ИЗМЕНЕНИЕ: get_infoset_key теперь не принимает player_id
     infoset_key = state.get_infoset_key()
     current_player = state.current_player
     legal_actions = state.get_legal_actions()
     num_actions = len(legal_actions)
 
     if num_actions == 0:
-        undo_info = state.apply_action(None)
-        payoffs = mccfr_traverse(state, strategy_profile)
-        state.undo_action(undo_info)
-        return payoffs
+        next_state = state.apply_action(None)
+        return mccfr_traverse(next_state, strategy_profile)
 
     if infoset_key not in strategy_profile:
         strategy_profile[infoset_key] = {
@@ -42,10 +39,9 @@ def mccfr_traverse(state, strategy_profile):
 
     action_utils = np.zeros((num_actions, state.players))
     for i, action in enumerate(legal_actions):
-        undo_info = state.apply_action(action)
-        # ИСПРАВЛЕНИЕ: Передаем измененное состояние `state`, а не `next_state`
-        action_utils[i] = mccfr_traverse(state, strategy_profile)
-        state.undo_action(undo_info)
+        # ИСПРАВЛЕНО: Создаем next_state и передаем его
+        next_state = state.apply_action(action)
+        action_utils[i] = mccfr_traverse(next_state, strategy_profile)
 
     node_utils = np.dot(strategy, action_utils)
     
