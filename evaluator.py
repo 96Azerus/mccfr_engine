@@ -1,10 +1,9 @@
-# mccfr_engine/evaluator.py
+# mccfr_engine/evaluator.py (v2 - исправлена ошибка с itertools.accumulate)
 """
 Модуль для оценки рук и подсчета очков в OFC Pineapple.
 Объединяет проверенные эвалюаторы для 3 и 5 карт и логику роялти.
 """
 import itertools
-import logging
 from collections import Counter
 from typing import List, Tuple, Dict, Optional
 
@@ -69,7 +68,8 @@ class LookupTable5Card:
                 self.unsuited_lookup[PRIMES[pair_idx]**2 * PRIMES[k1] * PRIMES[k2] * PRIMES[k3]] = rank; rank += 1
 
     def _prime_product_from_rankbits(self, rankbits: int) -> int:
-        return int(itertools.accumulate((PRIMES[i] for i in INT_RANKS if rankbits & (1 << i)), func=lambda x, y: x * y, initial=1)[-1])
+        # ИСПРАВЛЕНИЕ: Оборачиваем в list()
+        return list(itertools.accumulate((PRIMES[i] for i in INT_RANKS if rankbits & (1 << i)), func=lambda x, y: x * y, initial=1))[-1]
 
 class Evaluator5Card:
     def __init__(self): self.table = LookupTable5Card()
@@ -80,7 +80,8 @@ class Evaluator5Card:
             rank_bitmask = sum(1 << Card.get_rank_int(c) for c in cards)
             return self.table.flush_lookup.get(self.table._prime_product_from_rankbits(rank_bitmask), self.table.WORST_RANK_5CARD)
         else:
-            prime_product = int(itertools.accumulate((Card.get_prime(c) for c in cards), func=lambda x, y: x * y, initial=1)[-1])
+            # ИСПРАВЛЕНИЕ: Оборачиваем в list()
+            prime_product = list(itertools.accumulate((Card.get_prime(c) for c in cards), func=lambda x, y: x * y, initial=1))[-1]
             return self.table.unsuited_lookup.get(prime_product, self.table.WORST_RANK_5CARD)
     def get_rank_class(self, hand_rank: int) -> int:
         if not (0 < hand_rank < self.table.WORST_RANK_5CARD): return 9
