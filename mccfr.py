@@ -1,7 +1,7 @@
-# mccfr_engine/mccfr.py (v3 - правильное имя функции)
+# mccfr_engine/mccfr.py (v4 - исправлены рекурсивные вызовы)
 import numpy as np
 
-def mccfr_traverse(state, strategy_profile): # ВОЗВРАЩАЕМ ИМЯ mccfr_traverse
+def mccfr_traverse(state, strategy_profile):
     """
     Рекурсивная функция для обхода дерева игры и обновления стратегии.
     """
@@ -14,8 +14,7 @@ def mccfr_traverse(state, strategy_profile): # ВОЗВРАЩАЕМ ИМЯ mccfr
     num_actions = len(legal_actions)
 
     if num_actions == 0:
-        # Если нет действий, просто передаем ход следующему
-        # Это может случиться, если колода закончилась до заполнения доски
+        # ИСПРАВЛЕНО: Передаем strategy_profile
         return mccfr_traverse(state.apply_action(None), strategy_profile)
 
     if infoset_key not in strategy_profile:
@@ -26,7 +25,6 @@ def mccfr_traverse(state, strategy_profile): # ВОЗВРАЩАЕМ ИМЯ mccfr
     
     node = strategy_profile[infoset_key]
     
-    # Проверка на случай, если количество действий изменилось (не должно, но для безопасности)
     if len(node['regret_sum']) != num_actions:
         node['regret_sum'] = np.zeros(num_actions, dtype=np.float32)
         node['strategy_sum'] = np.zeros(num_actions, dtype=np.float32)
@@ -48,6 +46,7 @@ def mccfr_traverse(state, strategy_profile): # ВОЗВРАЩАЕМ ИМЯ mccfr
     action_utils = np.zeros((num_actions, state.players))
     for i, action in enumerate(legal_actions):
         next_state = state.apply_action(action)
+        # ИСПРАВЛЕНО: Передаем strategy_profile
         action_utils[i] = mccfr_traverse(next_state, strategy_profile)
 
     # Ожидаемая утилита узла для всех игроков
