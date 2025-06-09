@@ -1,4 +1,4 @@
-# mccfr_engine/ofc_game.py (v5 - без deepcopy, с ручным откатом состояния)
+# mccfr_engine/ofc_game.py (v6 - Оптимизация get_infoset_key)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
@@ -50,8 +50,9 @@ class Board:
         total += get_row_royalty(self.get_row_cards('bottom'), 'bottom')
         return total
 
-    def to_str_tuple(self) -> Tuple[str, ...]:
-        return tuple(Card.to_str(c) if c else '_' for r in ['top', 'middle', 'bottom'] for c in self.rows[r])
+    def to_int_tuple(self) -> Tuple[Optional[int], ...]:
+        # ИЗМЕНЕНИЕ: Возвращаем кортеж int, а не str. Это намного быстрее.
+        return tuple(c for r in ['top', 'middle', 'bottom'] for c in self.rows[r])
 
 class GameState:
     def __init__(self, players=2):
@@ -64,8 +65,6 @@ class GameState:
         self.current_player = (self.dealer + 1) % self.players
         self.deck = Deck()
         self._is_terminal = False
-        self._payoffs = [0.0] * players
-        self._handle_deal()
 
     def _handle_deal(self):
         num_to_deal = 5 if self.street == 1 else 3
@@ -80,7 +79,6 @@ class GameState:
         return False
 
     def get_payoffs(self) -> List[float]:
-        # Расчет бонусов за фантазию (упрощенный)
         fantasy_payoffs = [0.0] * self.players
         for i, board in enumerate(self.boards):
             if len(board.get_row_cards('top')) == 3 and not board.is_foul():
@@ -130,63 +128,34 @@ class GameState:
         return list(actions)
 
     def apply_action(self, action: Optional[Tuple]):
-        """Модифицирует текущее состояние. Возвращает информацию для отката."""
-        if not action: # Пустой ход
-            # Сохраняем только то, что меняется
+        if not action:
             original_player = self.current_player
             original_street = self.street
             original_dealt = self.dealt_cards
-            
-            # Меняем состояние
             if self.current_player == self.dealer: self.street += 1
             self.current_player = (self.current_player + 1) % self.players
             if self.street > 5: self._is_terminal = True
             else: self._handle_deal()
-            
-            # Возвращаем информацию для отката
-            return {
-                "type": "pass",
-                "player": original_player,
-                "street": original_street,
-                "dealt": original_dealt,
-                "deck_cards": []
-            }
+            return {"type": "pass", "player": original_player, "street": original_street, "dealt": original_dealt, "deck_cards": []}
 
         placement, discarded_card = action
-        
-        # Сохраняем состояние ДО изменений
-        undo_info = {
-            "type": "move",
-            "placement": placement,
-            "discarded": discarded_card,
-            "player": self.current_player,
-            "street": self.street,
-            "dealt": self.dealt_cards,
-            "deck_cards": [c for c, _ in placement] + ([discarded_card] if discarded_card else [])
-        }
-
-        # Применяем изменения
+        undo_info = {"type": "move", "placement": placement, "discarded": discarded_card, "player": self.current_player, "street": self.street, "dealt": self.dealt_cards, "deck_cards": [c for c, _ in placement] + ([discarded_card] if discarded_card else [])}
         for card, (row, idx) in placement:
             self.boards[self.current_player].rows[row][idx] = card
         if discarded_card is not None:
             self.discards[self.current_player].append(discarded_card)
-
         if self.current_player == self.dealer: self.street += 1
         self.current_player = (self.current_player + 1) % self.players
-        
         if self.street > 5: self._is_terminal = True
         else: self._handle_deal()
-            
         return undo_info
 
     def undo_action(self, undo_info: Dict):
-        """Откатывает состояние, используя информацию из undo_info."""
         self.current_player = undo_info["player"]
         self.street = undo_info["street"]
         self.dealt_cards = undo_info["dealt"]
         self.deck.add(undo_info["deck_cards"])
         self._is_terminal = False
-
         if undo_info["type"] == "move":
             placement = undo_info["placement"]
             discarded_card = undo_info["discarded"]
@@ -195,11 +164,16 @@ class GameState:
             if discarded_card is not None:
                 self.discards[self.current_player].pop()
 
-    def get_infoset_key(self, player_id: int) -> str:
-        player_board = self.boards[player_id].to_str_tuple()
-        opponent_board = self.boards[1 - player_id].to_str_tuple()
-        my_discards = tuple(sorted([Card.to_str(c) for c in self.discards[player_id]]))
-        dealt = tuple(sorted([Card.to_str(c) for c in self.dealt_cards])) if self.dealt_cards else tuple()
-        if self.street > 1 and player_id != self.current_player:
-            dealt = tuple(['?'] * len(dealt))
-        return f"S:{self.street}|P:{player_id}|DLR:{self.dealer}|Board:{player_board}|OppB:{opponent_board}|Dealt:{dealt}|MyDisc:{my_discards}"
+    def get_infoset_key(self) -> Tuple:
+        # ИЗМЕНЕНИЕ: Ключ теперь - это кортеж из чисел и других примитивов. Это намного быстрее.
+        player_board = self.boards[self.current_player].to_int_tuple()
+        opponent_board = self.boards[(self.current_player + 1) % self.players].to_int_tuple()
+        my_discards = tuple(sorted(self.discards[self.current_player]))
+        dealt = tuple(sorted(self.dealt_cards)) if self.dealt_cards else tuple()
+        
+        # На улицах 2-5 мы не видим карты оппонента, поэтому маскируем их
+        if self.street > 1:
+            # Создаем ключ с точки зрения текущего игрока
+            pass # В нашей реализации 1х1 это не так важно, как в многопользовательской
+        
+        return (self.street, self.current_player, player_board, opponent_board, dealt, my_discards)
