@@ -1,34 +1,26 @@
-# mccfr_engine/mccfr.py
+# mccfr_engine/mccfr.py (v2 - правильная рекурсия)
 import numpy as np
-import random
 
-def mccfr_traverse(state, player_id, strategy_profile):
+def cfr_traverse(state, strategy_profile):
+    """
+    Рекурсивная функция для обхода дерева игры и обновления стратегии.
+    """
     if state.is_terminal():
-        payoffs = state.get_payoffs()
-        return payoffs[player_id]
+        return state.get_payoffs()
 
-    # Если ход не текущего игрока, сэмплируем действие и идем дальше
-    if player_id != state.current_player:
-        legal_actions = state.get_legal_actions()
-        if not legal_actions: # Если у оппонента нет ходов (конец игры)
-            return state.get_payoffs()[player_id]
-        
-        action = random.choice(legal_actions) # Простой сэмплинг для оппонента
-        next_state = state.apply_action(action)
-        return mccfr_traverse(next_state, player_id, strategy_profile)
-
-    # Если ход текущего игрока, применяем CFR
-    infoset_key = state.get_infoset_key(player_id)
+    current_player = state.current_player
+    infoset_key = state.get_infoset_key(current_player)
     legal_actions = state.get_legal_actions()
     num_actions = len(legal_actions)
 
     if num_actions == 0:
-        return state.get_payoffs()[player_id]
+        return cfr_traverse(state.apply_action(None), strategy_profile) # Если нет действий, просто передаем ход
 
     if infoset_key not in strategy_profile:
         strategy_profile[infoset_key] = {
             'regret_sum': np.zeros(num_actions, dtype=np.float32),
-            'strategy_sum': np.zeros(num_actions, dtype=np.float32)
+            'strategy_sum': np.zeros(num_actions, dtype=np.float32),
+            'action_map': {i: action for i, action in enumerate(legal_actions)} # Сохраняем карту действий
         }
     
     node = strategy_profile[infoset_key]
@@ -46,15 +38,21 @@ def mccfr_traverse(state, player_id, strategy_profile):
     # Обновляем среднюю стратегию
     node['strategy_sum'] += strategy
 
-    # Сэмплируем действия и считаем утилиты для каждого
-    action_utils = np.zeros(num_actions)
+    # Считаем утилиты для каждого действия
+    action_utils = np.zeros((num_actions, state.players))
     for i, action in enumerate(legal_actions):
         next_state = state.apply_action(action)
-        action_utils[i] = mccfr_traverse(next_state, player_id, strategy_profile)
+        action_utils[i] = cfr_traverse(next_state, strategy_profile)
 
-    # Обновление сожалений
-    node_util = np.sum(strategy * action_utils)
-    regrets = action_utils - node_util
+    # Ожидаемая утилита узла для всех игроков
+    node_utils = np.dot(strategy, action_utils)
+    
+    # Обновление сожалений для текущего игрока
+    # Сожаление = (утилита действия) - (средняя утилита узла)
+    current_player_action_utils = action_utils[:, current_player]
+    current_player_node_util = node_utils[current_player]
+    
+    regrets = current_player_action_utils - current_player_node_util
     node['regret_sum'] += regrets
     
-    return node_util
+    return node_utils
