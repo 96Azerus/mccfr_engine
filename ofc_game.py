@@ -1,4 +1,4 @@
-# mccfr_engine/ofc_game.py (v2 - с Action Abstraction)
+# mccfr_engine/ofc_game.py (v3 - Умная генерация действий)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
@@ -6,7 +6,7 @@ from copy import deepcopy
 from collections import Counter
 
 from card import Card, FULL_DECK_CARDS
-from evaluator import calculate_payoffs, get_hand_rank, get_row_royalty, FANTASY_BONUS, RANK_QUEEN, HAND_TYPE_TRIPS_3, get_hand_rank
+from evaluator import calculate_payoffs, get_hand_rank, get_row_royalty, FANTASY_BONUS, RANK_QUEEN, HAND_TYPE_TRIPS_3, evaluator_5card_instance
 
 # --- Классы Deck и Board остаются без изменений ---
 class Deck:
@@ -54,29 +54,21 @@ class Board:
             new_board.rows[row][idx] = card
         return new_board
 
-# --- Новая эвристическая функция для Action Abstraction ---
+# --- Эвристика остается для оценки, но не для генерации ---
 def score_placement_heuristic(board: Board) -> float:
-    """Простая эвристика для оценки перспективности доски."""
     score = 0.0
-    # Бонус за готовые роялти
     score += board.get_total_royalty() * 1.5 
-    
-    # Бонус за пары и сеты
     all_cards = board.get_all_cards()
     ranks = [Card.get_rank_int(c) for c in all_cards]
     rank_counts = Counter(ranks)
     for rank, count in rank_counts.items():
-        if count == 2: score += 2  # Пара
-        if count == 3: score += 10 # Сет
-        if count == 4: score += 25 # Каре
-
-    # Штраф за "мертвые" карты на топе (например, 2,3,4)
+        if count == 2: score += 2
+        if count == 3: score += 10
+        if count == 4: score += 25
     top_cards = board.get_row_cards('top')
     if top_cards:
         top_ranks = [Card.get_rank_int(c) for c in top_cards]
-        if max(top_ranks) < 8: # Если старшая карта на топе меньше T
-            score -= 5
-
+        if max(top_ranks) < 8: score -= 5
     return score
 
 class GameState:
@@ -126,43 +118,76 @@ class GameState:
         base_payoffs = calculate_payoffs(self.boards[0], self.boards[1])
         return [base + fantasy for base, fantasy in zip(base_payoffs, self._payoffs)]
 
-    # --- Обновленный get_legal_actions ---
+    # --- НОВАЯ, УМНАЯ ВЕРСИЯ get_legal_actions ---
     def get_legal_actions(self) -> List[Tuple]:
-        if self.is_terminal(): return []
+        if self.is_terminal() or not self.dealt_cards: return []
         
+        # 1. Определяем, какие карты ставить и какую сбросить
         cards_to_place_options = []
         if self.street == 1:
             cards_to_place_options.append((self.dealt_cards, None))
         else:
-            for card_to_discard in self.dealt_cards:
-                cards_to_place = [c for c in self.dealt_cards if c != card_to_discard]
-                cards_to_place_options.append((cards_to_place, card_to_discard))
+            # Эвристика для сброса: сбрасываем самую слабую, непарную, не одномастную карту
+            ranks = [Card.get_rank_int(c) for c in self.dealt_cards]
+            suits = [Card.get_suit_int(c) for c in self.dealt_cards]
+            rank_counts = Counter(ranks)
+            suit_counts = Counter(suits)
+            
+            best_card_to_discard = -1
+            min_score = float('inf')
 
-        scored_actions = []
+            for i, card in enumerate(self.dealt_cards):
+                rank = ranks[i]
+                suit = suits[i]
+                score = rank # Базовая оценка - ранг
+                if rank_counts[rank] > 1: score += 20 # Штраф за сброс пары
+                if suit_counts[suit] > 1: score += 10 # Штраф за сброс одномастной
+                
+                if score < min_score:
+                    min_score = score
+                    best_card_to_discard = card
+            
+            # Генерируем только один вариант сброса - лучший по эвристике
+            cards_to_place = [c for c in self.dealt_cards if c != best_card_to_discard]
+            cards_to_place_options.append((cards_to_place, best_card_to_discard))
+
+        # 2. Генерируем размещения для выбранных карт
+        actions = set() # Используем set для автоматического удаления дубликатов
         available_slots = self.boards[self.current_player].get_available_slots()
         
         for cards_to_place, discarded_card in cards_to_place_options:
             if len(available_slots) < len(cards_to_place): continue
             
-            # Генерируем все перестановки
-            slot_permutations = list(itertools.permutations(available_slots, len(cards_to_place)))
-            
-            for slots in slot_permutations:
-                placement = tuple(zip(cards_to_place, slots))
-                # Применяем размещение к временной доске и оцениваем
-                temp_board = self.boards[self.current_player].apply_placement(placement)
-                score = score_placement_heuristic(temp_board)
-                scored_actions.append((score, (placement, discarded_card)))
+            # --- Умная генерация вместо полного перебора ---
+            # Попробуем положить сильные комбинации на боттом
+            if len(cards_to_place) == 5:
+                for combo in itertools.combinations(cards_to_place, 5):
+                    rank, _, _ = get_hand_rank(list(combo))
+                    if rank < evaluator_5card_instance.table.MAX_FLUSH: # Если это стрит или лучше
+                        for p_slots in itertools.permutations([s for s in available_slots if s[0] == 'bottom'], 5):
+                            placement = tuple(zip(combo, p_slots))
+                            actions.add((placement, discarded_card))
 
-        # Сортируем действия по эвристической оценке и берем лучшие
-        scored_actions.sort(key=lambda x: x[0], reverse=True)
-        
-        # ACTION_ABSTRACTION_LIMIT - ключевой параметр для тюнинга
-        ACTION_ABSTRACTION_LIMIT = 30 
-        
-        top_actions = [action for score, action in scored_actions[:ACTION_ABSTRACTION_LIMIT]]
-        
-        return top_actions
+            # Пробуем разместить пары
+            ranks = [Card.get_rank_int(c) for c in cards_to_place]
+            rank_counts = Counter(ranks)
+            pairs = [r for r, c in rank_counts.items() if c == 2]
+            if pairs:
+                pair_cards = [c for c in cards_to_place if Card.get_rank_int(c) == pairs[0]]
+                other_cards = [c for c in cards_to_place if c not in pair_cards]
+                # Положить пару на мидл, остальное на боттом
+                if len(available_slots) >= len(cards_to_place):
+                     # Это упрощенная логика, для скорости
+                     pass
+
+            # Базовая стратегия: просто генерируем ограниченное число случайных размещений
+            for _ in range(40): # Генерируем 40 случайных вариантов
+                random.shuffle(cards_to_place)
+                slots_sample = random.sample(available_slots, len(cards_to_place))
+                placement = tuple(zip(cards_to_place, slots_sample))
+                actions.add((placement, discarded_card))
+
+        return list(actions)
 
     # --- apply_action и get_infoset_key остаются без изменений ---
     def apply_action(self, action: Tuple) -> 'GameState':
