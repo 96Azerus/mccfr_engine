@@ -1,23 +1,25 @@
-# mccfr_engine/ofc_game.py (v4 - исправления логики)
+# mccfr_engine/ofc_game.py (v5 - без deepcopy, с ручным откатом состояния)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
-from copy import deepcopy
 from collections import Counter
 
 from card import Card, FULL_DECK_CARDS
-from evaluator import calculate_payoffs, get_hand_rank, get_row_royalty, FANTASY_BONUS, RANK_QUEEN, HAND_TYPE_TRIPS_3, evaluator_5card_instance
+from evaluator import calculate_payoffs, get_hand_rank, get_row_royalty, FANTASY_BONUS, RANK_QUEEN, HAND_TYPE_TRIPS_3
 
 class Deck:
-    def __init__(self, cards_to_exclude: Set[int] = None):
-        self.cards = list(FULL_DECK_CARDS - (cards_to_exclude or set()))
-        random.shuffle(self.cards)
+    def __init__(self, cards: Optional[List[int]] = None):
+        self.cards = cards if cards is not None else list(FULL_DECK_CARDS)
+        if cards is None:
+            random.shuffle(self.cards)
     def deal(self, n: int) -> List[int]:
         dealt = []
         for _ in range(n):
             if self.cards:
                 dealt.append(self.cards.pop())
         return dealt
+    def add(self, cards_to_add: List[int]):
+        self.cards.extend(cards_to_add)
 
 class Board:
     def __init__(self):
@@ -51,28 +53,6 @@ class Board:
     def to_str_tuple(self) -> Tuple[str, ...]:
         return tuple(Card.to_str(c) if c else '_' for r in ['top', 'middle', 'bottom'] for c in self.rows[r])
 
-    def apply_placement(self, placement: Tuple) -> 'Board':
-        new_board = deepcopy(self)
-        for card, (row, idx) in placement:
-            new_board.rows[row][idx] = card
-        return new_board
-
-def score_placement_heuristic(board: Board) -> float:
-    score = 0.0
-    score += board.get_total_royalty() * 1.5 
-    all_cards = board.get_all_cards()
-    ranks = [Card.get_rank_int(c) for c in all_cards]
-    rank_counts = Counter(ranks)
-    for rank, count in rank_counts.items():
-        if count == 2: score += 2
-        if count == 3: score += 10
-        if count == 4: score += 25
-    top_cards = board.get_row_cards('top')
-    if top_cards:
-        top_ranks = [Card.get_rank_int(c) for c in top_cards]
-        if max(top_ranks) < 8: score -= 5
-    return score
-
 class GameState:
     def __init__(self, players=2):
         self.players = players
@@ -96,31 +76,30 @@ class GameState:
     def is_terminal(self) -> bool:
         if self._is_terminal: return True
         if self.street > 5: return True
-        # Проверка на Фантазию (упрощенная)
-        for i, board in enumerate(self.boards):
-            if len(board.get_row_cards('top')) == 3 and not board.is_foul():
-                _, hand_type, _ = get_hand_rank(board.get_row_cards('top'))
-                if hand_type == HAND_TYPE_TRIPS_3:
-                    trip_rank = Counter(Card.get_rank_int(c) for c in board.get_row_cards('top')).most_common(1)[0][0]
-                    bonus = FANTASY_BONUS.get('trips', 30) + trip_rank
-                    self._payoffs[i] += bonus; self._payoffs[1-i] -= bonus
-                    self._is_terminal = True; return True
-                ranks = Counter(Card.get_rank_int(c) for c in board.get_row_cards('top'))
-                pair_rank = next((r for r, count in ranks.items() if count == 2), -1)
-                if pair_rank >= RANK_QUEEN:
-                    bonus = FANTASY_BONUS.get(pair_rank, 0)
-                    self._payoffs[i] += bonus; self._payoffs[1-i] -= bonus
-                    self._is_terminal = True; return True
+        if all(len(b.get_all_cards()) == 13 for b in self.boards): return True
         return False
 
     def get_payoffs(self) -> List[float]:
-        if not self._is_terminal:
-             if self.street > 5 or all(len(b.get_all_cards()) == 13 for b in self.boards):
-                 self._is_terminal = True
-             else:
-                 return [0.0] * self.players
+        # Расчет бонусов за фантазию (упрощенный)
+        fantasy_payoffs = [0.0] * self.players
+        for i, board in enumerate(self.boards):
+            if len(board.get_row_cards('top')) == 3 and not board.is_foul():
+                _, hand_type, _ = get_hand_rank(board.get_row_cards('top'))
+                bonus = 0
+                if hand_type == HAND_TYPE_TRIPS_3:
+                    trip_rank = Counter(Card.get_rank_int(c) for c in board.get_row_cards('top')).most_common(1)[0][0]
+                    bonus = FANTASY_BONUS.get('trips', 30) + trip_rank
+                else:
+                    ranks = Counter(Card.get_rank_int(c) for c in board.get_row_cards('top'))
+                    pair_rank = next((r for r, count in ranks.items() if count == 2), -1)
+                    if pair_rank >= RANK_QUEEN:
+                        bonus = FANTASY_BONUS.get(pair_rank, 0)
+                if bonus > 0:
+                    fantasy_payoffs[i] += bonus
+                    fantasy_payoffs[1-i] -= bonus
+        
         base_payoffs = calculate_payoffs(self.boards[0], self.boards[1])
-        return [base + fantasy for base, fantasy in zip(base_payoffs, self._payoffs)]
+        return [base + fantasy for base, fantasy in zip(base_payoffs, fantasy_payoffs)]
 
     def get_legal_actions(self) -> List[Tuple]:
         if self.is_terminal() or not self.dealt_cards: return []
@@ -129,7 +108,6 @@ class GameState:
         if self.street == 1:
             cards_to_place_options.append((self.dealt_cards, None))
         else:
-            # Упрощенная логика сброса для скорости
             cards_to_place = self.dealt_cards[:-1]
             discarded_card = self.dealt_cards[-1]
             cards_to_place_options.append((cards_to_place, discarded_card))
@@ -140,8 +118,7 @@ class GameState:
         for cards_to_place, discarded_card in cards_to_place_options:
             if len(available_slots) < len(cards_to_place): continue
             
-            # Ограничиваем количество перестановок
-            limit = 40 if len(cards_to_place) > 2 else 120
+            limit = 20 if len(cards_to_place) > 2 else 60
             slot_permutations = list(itertools.permutations(available_slots, len(cards_to_place)))
             if len(slot_permutations) > limit:
                 slot_permutations = random.sample(slot_permutations, limit)
@@ -152,39 +129,77 @@ class GameState:
         
         return list(actions)
 
-    def apply_action(self, action: Optional[Tuple]) -> 'GameState':
-        new_state = deepcopy(self)
-        
-        if action: # Если есть действие (не пустой ход)
-            placement, discarded_card = action
-            for card, (row, idx) in placement:
-                new_state.boards[new_state.current_player].rows[row][idx] = card
-            if discarded_card is not None:
-                new_state.discards[new_state.current_player].append(discarded_card)
+    def apply_action(self, action: Optional[Tuple]):
+        """Модифицирует текущее состояние. Возвращает информацию для отката."""
+        if not action: # Пустой ход
+            # Сохраняем только то, что меняется
+            original_player = self.current_player
+            original_street = self.street
+            original_dealt = self.dealt_cards
+            
+            # Меняем состояние
+            if self.current_player == self.dealer: self.street += 1
+            self.current_player = (self.current_player + 1) % self.players
+            if self.street > 5: self._is_terminal = True
+            else: self._handle_deal()
+            
+            # Возвращаем информацию для отката
+            return {
+                "type": "pass",
+                "player": original_player,
+                "street": original_street,
+                "dealt": original_dealt,
+                "deck_cards": []
+            }
 
-        # Переход хода
-        if new_state.current_player == new_state.dealer:
-            new_state.street += 1
-        new_state.current_player = (new_state.current_player + 1) % new_state.players
+        placement, discarded_card = action
         
-        if new_state.street > 5:
-            new_state._is_terminal = True
-        else:
-            new_state._handle_deal()
-        return new_state
+        # Сохраняем состояние ДО изменений
+        undo_info = {
+            "type": "move",
+            "placement": placement,
+            "discarded": discarded_card,
+            "player": self.current_player,
+            "street": self.street,
+            "dealt": self.dealt_cards,
+            "deck_cards": [c for c, _ in placement] + ([discarded_card] if discarded_card else [])
+        }
+
+        # Применяем изменения
+        for card, (row, idx) in placement:
+            self.boards[self.current_player].rows[row][idx] = card
+        if discarded_card is not None:
+            self.discards[self.current_player].append(discarded_card)
+
+        if self.current_player == self.dealer: self.street += 1
+        self.current_player = (self.current_player + 1) % self.players
+        
+        if self.street > 5: self._is_terminal = True
+        else: self._handle_deal()
+            
+        return undo_info
+
+    def undo_action(self, undo_info: Dict):
+        """Откатывает состояние, используя информацию из undo_info."""
+        self.current_player = undo_info["player"]
+        self.street = undo_info["street"]
+        self.dealt_cards = undo_info["dealt"]
+        self.deck.add(undo_info["deck_cards"])
+        self._is_terminal = False
+
+        if undo_info["type"] == "move":
+            placement = undo_info["placement"]
+            discarded_card = undo_info["discarded"]
+            for _, (row, idx) in placement:
+                self.boards[self.current_player].rows[row][idx] = None
+            if discarded_card is not None:
+                self.discards[self.current_player].pop()
 
     def get_infoset_key(self, player_id: int) -> str:
         player_board = self.boards[player_id].to_str_tuple()
         opponent_board = self.boards[1 - player_id].to_str_tuple()
         my_discards = tuple(sorted([Card.to_str(c) for c in self.discards[player_id]]))
         dealt = tuple(sorted([Card.to_str(c) for c in self.dealt_cards])) if self.dealt_cards else tuple()
-        
-        # На улице 1 карты оппонента видны, но мы это опускаем для уменьшения пространства состояний.
-        # MCCFR будет учиться играть против диапазона, что более общо.
-        # Важно, что мы видим свою руку.
-        if self.street > 1:
-            # На улицах 2-5 мы не видим карты оппонента, поэтому dealt не включаем в ключ для оппонента
-            if player_id != self.current_player:
-                dealt = tuple(['?'] * len(dealt))
-
+        if self.street > 1 and player_id != self.current_player:
+            dealt = tuple(['?'] * len(dealt))
         return f"S:{self.street}|P:{player_id}|DLR:{self.dealer}|Board:{player_board}|OppB:{opponent_board}|Dealt:{dealt}|MyDisc:{my_discards}"
