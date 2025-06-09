@@ -1,8 +1,9 @@
-# mccfr_engine/ofc_game.py (v6 - Оптимизация get_infoset_key)
+# mccfr_engine/ofc_game.py (v7 - правильное управление состоянием без deepcopy)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
 from collections import Counter
+from copy import copy
 
 from card import Card, FULL_DECK_CARDS
 from evaluator import calculate_payoffs, get_hand_rank, get_row_royalty, FANTASY_BONUS, RANK_QUEEN, HAND_TYPE_TRIPS_3
@@ -12,14 +13,10 @@ class Deck:
         self.cards = cards if cards is not None else list(FULL_DECK_CARDS)
         if cards is None:
             random.shuffle(self.cards)
-    def deal(self, n: int) -> List[int]:
-        dealt = []
-        for _ in range(n):
-            if self.cards:
-                dealt.append(self.cards.pop())
-        return dealt
-    def add(self, cards_to_add: List[int]):
-        self.cards.extend(cards_to_add)
+    def deal(self, n: int) -> Tuple[List[int], List[int]]:
+        dealt = self.cards[:n]
+        remaining = self.cards[n:]
+        return dealt, remaining
 
 class Board:
     def __init__(self):
@@ -51,24 +48,41 @@ class Board:
         return total
 
     def to_int_tuple(self) -> Tuple[Optional[int], ...]:
-        # ИЗМЕНЕНИЕ: Возвращаем кортеж int, а не str. Это намного быстрее.
         return tuple(c for r in ['top', 'middle', 'bottom'] for c in self.rows[r])
 
 class GameState:
-    def __init__(self, players=2):
-        self.players = players
-        self.boards = [Board() for _ in range(players)]
-        self.discards = [[] for _ in range(players)]
-        self.dealt_cards: Optional[List[int]] = None
-        self.street = 1
-        self.dealer = random.randint(0, players - 1)
-        self.current_player = (self.dealer + 1) % self.players
-        self.deck = Deck()
-        self._is_terminal = False
+    def __init__(self, from_state: Optional['GameState'] = None):
+        if from_state:
+            # Быстрое копирование без deepcopy
+            self.players = from_state.players
+            self.boards = [copy(b) for b in from_state.boards]
+            for i, board in enumerate(self.boards):
+                board.rows = {k: list(v) for k, v in from_state.boards[i].rows.items()}
+            self.discards = [list(d) for d in from_state.discards]
+            self.dealt_cards = from_state.dealt_cards
+            self.street = from_state.street
+            self.dealer = from_state.dealer
+            self.current_player = from_state.current_player
+            self.deck = from_state.deck
+            self._is_terminal = from_state._is_terminal
+        else:
+            # Инициализация новой игры
+            self.players = 2
+            self.boards = [Board() for _ in range(self.players)]
+            self.discards = [[] for _ in range(self.players)]
+            self.dealt_cards: Optional[List[int]] = None
+            self.street = 1
+            self.dealer = random.randint(0, self.players - 1)
+            self.current_player = (self.dealer + 1) % self.players
+            self.deck = Deck()
+            self._is_terminal = False
+            self._handle_deal()
 
     def _handle_deal(self):
         num_to_deal = 5 if self.street == 1 else 3
-        self.dealt_cards = self.deck.deal(num_to_deal)
+        dealt, remaining = self.deck.deal(num_to_deal)
+        self.dealt_cards = dealt
+        self.deck = Deck(remaining)
         if not self.dealt_cards or len(self.dealt_cards) < num_to_deal:
              self._is_terminal = True
 
@@ -127,53 +141,30 @@ class GameState:
         
         return list(actions)
 
-    def apply_action(self, action: Optional[Tuple]):
-        if not action:
-            original_player = self.current_player
-            original_street = self.street
-            original_dealt = self.dealt_cards
-            if self.current_player == self.dealer: self.street += 1
-            self.current_player = (self.current_player + 1) % self.players
-            if self.street > 5: self._is_terminal = True
-            else: self._handle_deal()
-            return {"type": "pass", "player": original_player, "street": original_street, "dealt": original_dealt, "deck_cards": []}
-
-        placement, discarded_card = action
-        undo_info = {"type": "move", "placement": placement, "discarded": discarded_card, "player": self.current_player, "street": self.street, "dealt": self.dealt_cards, "deck_cards": [c for c, _ in placement] + ([discarded_card] if discarded_card else [])}
-        for card, (row, idx) in placement:
-            self.boards[self.current_player].rows[row][idx] = card
-        if discarded_card is not None:
-            self.discards[self.current_player].append(discarded_card)
-        if self.current_player == self.dealer: self.street += 1
-        self.current_player = (self.current_player + 1) % self.players
-        if self.street > 5: self._is_terminal = True
-        else: self._handle_deal()
-        return undo_info
-
-    def undo_action(self, undo_info: Dict):
-        self.current_player = undo_info["player"]
-        self.street = undo_info["street"]
-        self.dealt_cards = undo_info["dealt"]
-        self.deck.add(undo_info["deck_cards"])
-        self._is_terminal = False
-        if undo_info["type"] == "move":
-            placement = undo_info["placement"]
-            discarded_card = undo_info["discarded"]
-            for _, (row, idx) in placement:
-                self.boards[self.current_player].rows[row][idx] = None
+    def apply_action(self, action: Optional[Tuple]) -> 'GameState':
+        new_state = GameState(from_state=self)
+        
+        if action:
+            placement, discarded_card = action
+            for card, (row, idx) in placement:
+                new_state.boards[new_state.current_player].rows[row][idx] = card
             if discarded_card is not None:
-                self.discards[self.current_player].pop()
+                new_state.discards[new_state.current_player].append(discarded_card)
+
+        if new_state.current_player == new_state.dealer:
+            new_state.street += 1
+        new_state.current_player = (new_state.current_player + 1) % new_state.players
+        
+        if new_state.street > 5:
+            new_state._is_terminal = True
+        else:
+            new_state._handle_deal()
+        return new_state
 
     def get_infoset_key(self) -> Tuple:
-        # ИЗМЕНЕНИЕ: Ключ теперь - это кортеж из чисел и других примитивов. Это намного быстрее.
         player_board = self.boards[self.current_player].to_int_tuple()
         opponent_board = self.boards[(self.current_player + 1) % self.players].to_int_tuple()
         my_discards = tuple(sorted(self.discards[self.current_player]))
         dealt = tuple(sorted(self.dealt_cards)) if self.dealt_cards else tuple()
-        
-        # На улицах 2-5 мы не видим карты оппонента, поэтому маскируем их
-        if self.street > 1:
-            # Создаем ключ с точки зрения текущего игрока
-            pass # В нашей реализации 1х1 это не так важно, как в многопользовательской
         
         return (self.street, self.current_player, player_board, opponent_board, dealt, my_discards)
