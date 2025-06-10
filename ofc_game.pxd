@@ -1,6 +1,7 @@
-# mccfr_engine/ofc_game.pxd
+# mccfr_engine/ofc_game.pxd (v12)
+
 # Объявляем C-уровень наших будущих скомпилированных классов
-from card cimport Card
+# БЕЗ cimport из .py файлов
 
 cdef class Deck:
     cdef public list cards
