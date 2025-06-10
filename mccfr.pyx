@@ -1,8 +1,7 @@
-# mccfr_engine/mccfr.pyx (v11 - правильный cimport)
+# mccfr_engine/mccfr.pyx (v11)
 import numpy as np
 cimport numpy as np
 
-# ИСПРАВЛЕНИЕ: Используем cimport, чтобы Cython знал C-определение GameState
 from ofc_game cimport GameState
 
 cpdef mccfr_traverse(GameState state, dict strategy_profile):
