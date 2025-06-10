@@ -1,16 +1,14 @@
-# mccfr_engine/mccfr.pyx
+# mccfr_engine/mccfr.pyx (v10)
 import numpy as np
 cimport numpy as np
 
-# Импортируем cdef-класс из другого .pyx файла
-from ofc_game cimport GameState
+# Обычный импорт, так как GameState теперь полностью определен в .pyx
+from ofc_game import GameState
 
-# Указываем, что функция будет быстрой C-функцией
 cpdef mccfr_traverse(GameState state, dict strategy_profile):
     if state.is_terminal():
         return state.get_payoffs()
 
-    # infoset_key теперь кортеж, что быстрее для ключей словаря
     infoset_key = state.get_infoset_key()
     current_player = state.current_player
     legal_actions = state.get_legal_actions()
@@ -32,7 +30,6 @@ cpdef mccfr_traverse(GameState state, dict strategy_profile):
         node['regret_sum'] = np.zeros(num_actions, dtype=np.float32)
         node['strategy_sum'] = np.zeros(num_actions, dtype=np.float32)
 
-    # Типизированные переменные для скорости
     cdef np.ndarray[np.float32_t] regrets = node['regret_sum']
     cdef np.ndarray[np.float32_t] strategy
     
