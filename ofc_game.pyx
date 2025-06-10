@@ -1,15 +1,13 @@
-# mccfr_engine/ofc_game.pyx (v12)
+# mccfr_engine/ofc_game.pyx (v13 - правильные cpdef)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
 from collections import Counter
 from libc.stdlib cimport rand, RAND_MAX
 
-# Обычный импорт из .py файлов
 import card
 import evaluator
 
-# cimport из .pxd файла
 from ofc_game cimport Deck, Board
 
 cdef class Deck:
@@ -36,7 +34,7 @@ cdef class Board:
     def __cinit__(self):
         self.rows = {'top': [None]*3, 'middle': [None]*5, 'bottom': [None]*5}
     
-    def get_all_cards(self):
+    cpdef get_all_cards(self): # ИСПРАВЛЕНО: def -> cpdef
         all_c = set()
         for row in self.rows.values():
             for c in row:
@@ -44,10 +42,10 @@ cdef class Board:
                     all_c.add(c)
         return all_c
 
-    def get_row_cards(self, str row_name):
+    cpdef get_row_cards(self, str row_name): # ИСПРАВЛЕНО: def -> cpdef
         return [c for c in self.rows[row_name] if c is not None]
 
-    def get_available_slots(self):
+    cpdef get_available_slots(self): # ИСПРАВЛЕНО: def -> cpdef
         slots = []
         for r, row_slots in self.rows.items():
             for i, c in enumerate(row_slots):
@@ -55,7 +53,7 @@ cdef class Board:
                     slots.append((r, i))
         return slots
 
-    def is_foul(self):
+    cpdef bint is_foul(self): # ИСПРАВЛЕНО: def -> cpdef
         if len(self.get_row_cards('top')) != 3 or len(self.get_row_cards('middle')) != 5 or len(self.get_row_cards('bottom')) != 5:
             return False
         top_rank, _, _ = evaluator.get_hand_rank(self.get_row_cards('top'))
@@ -63,7 +61,7 @@ cdef class Board:
         bot_rank, _, _ = evaluator.get_hand_rank(self.get_row_cards('bottom'))
         return (top_rank < mid_rank) or (mid_rank < bot_rank)
 
-    def to_int_tuple(self):
+    cpdef to_int_tuple(self): # ИСПРАВЛЕНО: def -> cpdef
         t = []
         for r in ['top', 'middle', 'bottom']:
             for c in self.rows[r]:
@@ -104,7 +102,7 @@ cdef class GameState:
         if not self.dealt_cards or len(self.dealt_cards) < num_to_deal:
              self._is_terminal = True
 
-    def is_terminal(self):
+    cpdef bint is_terminal(self): # ИСПРАВЛЕНО: def -> cpdef
         if self._is_terminal: return True
         if self.street > 5: return True
         for b in self.boards:
@@ -112,10 +110,10 @@ cdef class GameState:
                 return True
         return False
 
-    def get_payoffs(self):
+    cpdef get_payoffs(self): # ИСПРАВЛЕНО: def -> cpdef
         return evaluator.calculate_payoffs(self.boards[0], self.boards[1])
 
-    def get_legal_actions(self):
+    cpdef list get_legal_actions(self): # ИСПРАВЛЕНО: def -> cpdef
         if self.is_terminal() or not self.dealt_cards: return []
         
         cards_to_place_options = []
@@ -143,7 +141,7 @@ cdef class GameState:
         
         return list(actions)
 
-    def apply_action(self, action):
+    cpdef apply_action(self, action): # ИСПРАВЛЕНО: def -> cpdef
         new_state = GameState(from_state=self)
         
         if action:
@@ -163,7 +161,7 @@ cdef class GameState:
             new_state._handle_deal()
         return new_state
 
-    def get_infoset_key(self):
+    cpdef tuple get_infoset_key(self): # ИСПРАВЛЕНО: def -> cpdef
         player_board = self.boards[self.current_player].to_int_tuple()
         opponent_board = self.boards[(self.current_player + 1) % self.players].to_int_tuple()
         my_discards = tuple(sorted(self.discards[self.current_player]))
