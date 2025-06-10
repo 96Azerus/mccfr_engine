@@ -1,4 +1,4 @@
-# mccfr_engine/ofc_game.pyx (v10)
+# mccfr_engine/ofc_game.pyx (v12)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
@@ -37,7 +37,6 @@ cdef class Board:
         self.rows = {'top': [None]*3, 'middle': [None]*5, 'bottom': [None]*5}
     
     def get_all_cards(self):
-        # ИСПРАВЛЕНО: Убираем генератор
         all_c = set()
         for row in self.rows.values():
             for c in row:
@@ -49,7 +48,6 @@ cdef class Board:
         return [c for c in self.rows[row_name] if c is not None]
 
     def get_available_slots(self):
-        # ИСПРАВЛЕНО: Убираем генератор
         slots = []
         for r, row_slots in self.rows.items():
             for i, c in enumerate(row_slots):
@@ -66,7 +64,6 @@ cdef class Board:
         return (top_rank < mid_rank) or (mid_rank < bot_rank)
 
     def to_int_tuple(self):
-        # ИСПРАВЛЕНО: Убираем генератор
         t = []
         for r in ['top', 'middle', 'bottom']:
             for c in self.rows[r]:
@@ -110,7 +107,6 @@ cdef class GameState:
     def is_terminal(self):
         if self._is_terminal: return True
         if self.street > 5: return True
-        # ИСПРАВЛЕНО: Убираем генератор
         for b in self.boards:
             if len(b.get_all_cards()) == 13:
                 return True
