@@ -1,22 +1,23 @@
-# mccfr_engine/ofc_game.pyx (v9 - с cpdef)
+# mccfr_engine/ofc_game.pyx (v10)
 import random
 import itertools
 from typing import List, Tuple, Set, Optional, Dict
 from collections import Counter
 from libc.stdlib cimport rand, RAND_MAX
 
-from card cimport Card
-from evaluator cimport calculate_payoffs, get_hand_rank, get_row_royalty, FANTASY_BONUS, RANK_QUEEN, HAND_TYPE_TRIPS_3
+# Обычный импорт из .py файлов
+import card
+import evaluator
+
+# cimport из .pxd файла
+from ofc_game cimport Deck, Board
 
 cdef class Deck:
-    cdef list cards
-    
-    def __init__(self, list cards=None):
+    def __cinit__(self, list cards=None):
         if cards is not None:
             self.cards = cards
         else:
-            from card import FULL_DECK_CARDS
-            self.cards = list(FULL_DECK_CARDS)
+            self.cards = list(card.FULL_DECK_CARDS)
             self.shuffle()
 
     cdef shuffle(self):
@@ -32,39 +33,48 @@ cdef class Deck:
         return dealt, remaining
 
 cdef class Board:
-    cdef public dict rows
-    
-    def __init__(self):
+    def __cinit__(self):
         self.rows = {'top': [None]*3, 'middle': [None]*5, 'bottom': [None]*5}
     
-    cpdef get_all_cards(self):
-        return {c for row in self.rows.values() for c in row if c is not None}
+    def get_all_cards(self):
+        # ИСПРАВЛЕНО: Убираем генератор
+        all_c = set()
+        for row in self.rows.values():
+            for c in row:
+                if c is not None:
+                    all_c.add(c)
+        return all_c
 
-    cpdef get_row_cards(self, str row_name):
+    def get_row_cards(self, str row_name):
         return [c for c in self.rows[row_name] if c is not None]
 
-    cpdef get_available_slots(self):
-        return [(r, i) for r, slots in self.rows.items() for i, c in enumerate(slots) if c is None]
+    def get_available_slots(self):
+        # ИСПРАВЛЕНО: Убираем генератор
+        slots = []
+        for r, row_slots in self.rows.items():
+            for i, c in enumerate(row_slots):
+                if c is None:
+                    slots.append((r, i))
+        return slots
 
-    cpdef bint is_foul(self):
+    def is_foul(self):
         if len(self.get_row_cards('top')) != 3 or len(self.get_row_cards('middle')) != 5 or len(self.get_row_cards('bottom')) != 5:
             return False
-        top_rank, _, _ = get_hand_rank(self.get_row_cards('top'))
-        mid_rank, _, _ = get_hand_rank(self.get_row_cards('middle'))
-        bot_rank, _, _ = get_hand_rank(self.get_row_cards('bottom'))
+        top_rank, _, _ = evaluator.get_hand_rank(self.get_row_cards('top'))
+        mid_rank, _, _ = evaluator.get_hand_rank(self.get_row_cards('middle'))
+        bot_rank, _, _ = evaluator.get_hand_rank(self.get_row_cards('bottom'))
         return (top_rank < mid_rank) or (mid_rank < bot_rank)
 
-    cpdef to_int_tuple(self):
-        return tuple(c for r in ['top', 'middle', 'bottom'] for c in self.rows[r])
+    def to_int_tuple(self):
+        # ИСПРАВЛЕНО: Убираем генератор
+        t = []
+        for r in ['top', 'middle', 'bottom']:
+            for c in self.rows[r]:
+                t.append(c)
+        return tuple(t)
 
 cdef class GameState:
-    cdef public int players, street, dealer, current_player
-    cdef public list boards, discards
-    cdef public list dealt_cards
-    cdef public Deck deck
-    cdef public bint _is_terminal
-
-    def __init__(self, GameState from_state=None):
+    def __cinit__(self, GameState from_state=None):
         if from_state:
             self.players = from_state.players
             self.boards = [Board() for _ in range(self.players)]
@@ -97,16 +107,19 @@ cdef class GameState:
         if not self.dealt_cards or len(self.dealt_cards) < num_to_deal:
              self._is_terminal = True
 
-    cpdef bint is_terminal(self):
+    def is_terminal(self):
         if self._is_terminal: return True
         if self.street > 5: return True
-        if all(len(b.get_all_cards()) == 13 for b in self.boards): return True
+        # ИСПРАВЛЕНО: Убираем генератор
+        for b in self.boards:
+            if len(b.get_all_cards()) == 13:
+                return True
         return False
 
-    cpdef get_payoffs(self):
-        return calculate_payoffs(self.boards[0], self.boards[1])
+    def get_payoffs(self):
+        return evaluator.calculate_payoffs(self.boards[0], self.boards[1])
 
-    cpdef list get_legal_actions(self):
+    def get_legal_actions(self):
         if self.is_terminal() or not self.dealt_cards: return []
         
         cards_to_place_options = []
@@ -134,13 +147,13 @@ cdef class GameState:
         
         return list(actions)
 
-    cpdef apply_action(self, action):
+    def apply_action(self, action):
         new_state = GameState(from_state=self)
         
         if action:
             placement, discarded_card = action
-            for card, (row, idx) in placement:
-                new_state.boards[new_state.current_player].rows[row][idx] = card
+            for c, (row, idx) in placement:
+                new_state.boards[new_state.current_player].rows[row][idx] = c
             if discarded_card is not None:
                 new_state.discards[new_state.current_player].append(discarded_card)
 
@@ -154,7 +167,7 @@ cdef class GameState:
             new_state._handle_deal()
         return new_state
 
-    cpdef tuple get_infoset_key(self):
+    def get_infoset_key(self):
         player_board = self.boards[self.current_player].to_int_tuple()
         opponent_board = self.boards[(self.current_player + 1) % self.players].to_int_tuple()
         my_discards = tuple(sorted(self.discards[self.current_player]))
