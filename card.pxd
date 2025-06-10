@@ -1,11 +1,5 @@
-cdef class Card:
-    @staticmethod
-    int from_str(str)
-    @staticmethod
-    str to_str(int)
-    @staticmethod
-    int get_rank_int(int)
-    @staticmethod
-    int get_suit_int(int)
-
-cdef set FULL_DECK_CARDS
+# mccfr_engine/card.pxd
+# Этот файл описывает card.py для Cython
+# Мы не объявляем класс как cdef, потому что он остается в .py файле
+# Мы просто импортируем его как объект Python
+pass # Оставляем пустым, будем использовать обычный import
